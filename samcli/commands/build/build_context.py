@@ -6,7 +6,7 @@ import logging
 import os
 import pathlib
 import shutil
-from typing import Dict, Optional, List, cast
+from typing import Dict, Optional, List, cast, Union
 
 import click
 
@@ -19,7 +19,7 @@ from samcli.lib.bootstrap.nested_stack.nested_stack_manager import NestedStackMa
 from samcli.lib.build.build_graph import DEFAULT_DEPENDENCIES_DIR
 from samcli.lib.intrinsic_resolver.intrinsics_symbol_table import IntrinsicsSymbolTable
 from samcli.lib.providers.provider import ResourcesToBuildCollector, Stack, Function, LayerVersion
-from samcli.lib.providers.sam_function_provider import SamFunctionProvider
+from samcli.lib.providers.sam_function_provider import SamFunctionProvider, RefreshableSamFunctionProvider
 from samcli.lib.providers.sam_layer_provider import SamLayerProvider
 from samcli.lib.providers.sam_stack_provider import SamLocalStackProvider
 from samcli.lib.utils.osutils import BUILD_DIR_PERMISSIONS
@@ -128,7 +128,7 @@ class BuildContext:
         # Note(xinhol): self._use_raw_codeuri is added temporarily to fix issue #2717
         # when base_dir is provided, codeuri should not be resolved based on template file path.
         # we will refactor to make all path resolution inside providers intead of in multiple places
-        self._function_provider = SamFunctionProvider(self.stacks, self._use_raw_codeuri)
+        self._function_provider = RefreshableSamFunctionProvider(self.stacks, use_raw_codeuri=self._use_raw_codeuri)
         self._layer_provider = SamLayerProvider(self.stacks, self._use_raw_codeuri)
 
         if not self._base_dir:
@@ -385,10 +385,19 @@ Commands you can use next
         """
         result = ResourcesToBuildCollector()
         # Get the functions and its layer. Skips if it's inline.
-        self._collect_single_function_and_dependent_layers(resource_identifier, result)
-        self._collect_single_buildable_layer(resource_identifier, result)
+        function = self.function_provider.get(resource_identifier)
+        if function:
+            if self._is_function_buildable(function):
+                result.add_function(function)
+            result.add_layers([l for l in function.layers if self._is_layer_buildable(l)])
 
-        if not result.functions and not result.layers:
+        layer = self.layer_provider.get(resource_identifier)
+        if layer and self._is_layer_buildable(layer):
+            result.add_layer(layer)
+        # self._collect_single_function_and_dependent_layers(resource_identifier, result)
+        # self._collect_single_buildable_layer(resource_identifier, result)
+
+        if not function and not layer:
             # Collect all functions and layers that are not inline
             all_resources = [f.name for f in self.function_provider.get_all() if not f.inlinecode]
             all_resources.extend([l.name for l in self.layer_provider.get_all()])
@@ -399,6 +408,13 @@ Commands you can use next
             LOG.info(available_resource_message)
             raise ResourceNotFound(f"Unable to find a function or layer with name '{resource_identifier}'")
         return result
+
+    def get_resource(self, resource_identifier: str) -> Union[Function, LayerVersion]:
+        function = self.function_provider.get(resource_identifier)
+        if function:
+            return function
+        else:
+            return self._layer_provider.get(resource_identifier)
 
     def collect_all_build_resources(self) -> ResourcesToBuildCollector:
         """Collect all buildable resources. Including Lambda functions and layers.

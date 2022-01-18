@@ -2,15 +2,18 @@
 WatchManager for Sync Watch Logic
 """
 import logging
+import re
 import time
 import threading
 
 from typing import List, Optional, TYPE_CHECKING
+from deepdiff import DeepDiff
 
+from samcli.lib.samlib.resource_metadata_normalizer import ResourceMetadataNormalizer
 from samcli.lib.utils.colors import Colored
 from samcli.lib.providers.exceptions import MissingCodeUri, MissingLocalDefinition
 
-from samcli.lib.providers.provider import ResourceIdentifier, Stack, get_all_resource_ids
+from samcli.lib.providers.provider import ResourceIdentifier, Stack, get_all_resource_ids, get_full_path
 from samcli.lib.utils.code_trigger_factory import CodeTriggerFactory
 from samcli.lib.providers.sam_stack_provider import SamLocalStackProvider
 from samcli.lib.utils.path_observer import HandlerObserver
@@ -82,12 +85,61 @@ class WatchManager:
         self._trigger_factory = None
 
         self._waiting_infra_sync = False
+        # self._is_infra_change = False
+        # self._updated_resources = set()
         self._color = Colored()
 
     def queue_infra_sync(self) -> None:
         """Queue up an infra structure sync.
         A simple bool flag is suffice
         """
+        # self._waiting_infra_sync = True
+
+        if not self._stacks:
+            # self._is_infra_change = True
+            self._waiting_infra_sync = True
+            return
+
+        new_stacks = SamLocalStackProvider.get_stacks(self._template)[0]
+        old_stacks_by_name = {s.name: s for s in self._stacks}
+        new_stacks_by_name = {s.name: s for s in new_stacks}
+
+        if old_stacks_by_name.keys() != new_stacks_by_name.keys():
+            # self._is_infra_change = True
+            self._waiting_infra_sync = True
+            return
+
+        updated_resources = set()
+        for stack_name, old_stack in old_stacks_by_name.items():
+            template_dict_new = new_stacks_by_name[stack_name].template_dict
+            diff = DeepDiff(
+                old_stack.template_dict,
+                template_dict_new,
+                exclude_regex_paths=[
+                    r"root\['Resources'\]\[.*\]\['Properties'\]\['Code'\]\[('S3Key'|'ImageUri')\]",
+                    r"root\['Resources'\]\[.*\]\['Properties'\]\['TemplateURL'\]",
+                ],
+            )
+            if len(diff) != 1 or "values_changed" not in diff:
+                # self._is_infra_change = True
+                self._waiting_infra_sync = True
+                return
+            for value_path in diff["values_changed"]:
+                regex = r"root\['Resources'\]\['(.*)'\]\['Metadata'\]\['aws:asset:path'\]"
+                metadata_asset_path = re.compile(regex)
+                if not metadata_asset_path.match(value_path):
+                    # self._updated_resources = set()
+                    # self._is_infra_change = True
+                    self._waiting_infra_sync = True
+                    return
+                else:
+                    logical_id = str(re.search(regex, value_path).group(1))
+                    resource = old_stack.resources.get(logical_id)
+                    resource_id = ResourceMetadataNormalizer.get_resource_id(resource, logical_id)
+                    # self._updated_resources.add(ResourceIdentifier(get_full_path(old_stack.stack_path, resource_id)))
+                    updated_resources.add(ResourceIdentifier(get_full_path(old_stack.stack_path, resource_id)))
+        for resource_id in updated_resources:
+            self._on_code_change_wrapper(resource_id)()
         self._waiting_infra_sync = True
 
     def _update_stacks(self) -> None:
@@ -176,6 +228,9 @@ class WatchManager:
         try:
             LOG.info(self._color.cyan("Starting infra sync."))
             self._execute_infra_context()
+            # if self._is_infra_change:
+            #     self._execute_infra_context()
+            #     self._is_infra_change = False
         except Exception as e:
             LOG.error(
                 self._color.red("Failed to sync infra. Code sync is paused until template/stack is fixed."),
@@ -192,6 +247,9 @@ class WatchManager:
             self._update_stacks()
             self._add_template_trigger()
             self._add_code_triggers()
+            # for resource_id in self._updated_resources:
+            #     self._on_code_change_wrapper(resource_id)()
+            # self._updated_resources = set()
             self._start_code_sync()
             LOG.info(self._color.green("Infra sync completed."))
 

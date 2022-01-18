@@ -54,6 +54,7 @@ class AbstractLayerSyncFlow(SyncFlow, ABC):
         self._new_layer_version = None
         self._zip_file = None
         self._artifact_folder = None
+        self._local_sha = None
 
     def set_up(self) -> None:
         super().set_up()
@@ -201,19 +202,25 @@ class LayerSyncFlow(AbstractLayerSyncFlow):
     def gather_resources(self) -> None:
         """Build layer and ZIP it into a temp file in self._zip_file"""
         with self._get_lock_chain():
-            builder = ApplicationBuilder(
-                self._build_context.collect_build_resources(self._layer_identifier),
-                self._build_context.build_dir,
-                self._build_context.base_dir,
-                self._build_context.cache_dir,
-                cached=True,
-                is_building_specific_resource=True,
-                manifest_path_override=self._build_context.manifest_path_override,
-                container_manager=self._build_context.container_manager,
-                mode=self._build_context.mode,
-            )
-            LOG.debug("%sBuilding Layer", self.log_prefix)
-            self._artifact_folder = builder.build().artifacts.get(self._layer_identifier)
+            resources_to_build = self._build_context.collect_build_resources(self._layer_identifier)
+            if resources_to_build.functions or resources_to_build.layers:
+                builder = ApplicationBuilder(
+                    resources_to_build,
+                    self._build_context.build_dir,
+                    self._build_context.base_dir,
+                    self._build_context.cache_dir,
+                    cached=True,
+                    is_building_specific_resource=True,
+                    manifest_path_override=self._build_context.manifest_path_override,
+                    container_manager=self._build_context.container_manager,
+                    mode=self._build_context.mode,
+                )
+                LOG.debug("%sBuilding Layer", self.log_prefix)
+                self._artifact_folder = builder.build().artifacts.get(self._layer_identifier)
+            else:
+                # non-buildable resource, then just use codeuri as built artifact folder
+                resource = self._build_context.get_resource(self._layer_identifier)
+                self._artifact_folder = resource.codeuri
 
         zip_file_path = os.path.join(tempfile.gettempdir(), f"data-{uuid.uuid4().hex}")
         self._zip_file = make_zip(zip_file_path, self._artifact_folder)

@@ -77,22 +77,28 @@ class ZipFunctionSyncFlow(FunctionSyncFlow):
             if self._function.layers:
                 exit_stack.enter_context(self._get_lock_chain())
 
-            builder = ApplicationBuilder(
-                self._build_context.collect_build_resources(self._function_identifier),
-                self._build_context.build_dir,
-                self._build_context.base_dir,
-                self._build_context.cache_dir,
-                cached=True,
-                is_building_specific_resource=True,
-                manifest_path_override=self._build_context.manifest_path_override,
-                container_manager=self._build_context.container_manager,
-                mode=self._build_context.mode,
-                combine_dependencies=self._combine_dependencies(),
-            )
-            LOG.debug("%sBuilding Function", self.log_prefix)
-            build_result = builder.build()
-            self._build_graph = build_result.build_graph
-            self._artifact_folder = build_result.artifacts.get(self._function_identifier)
+            resources_to_build = self._build_context.collect_build_resources(self._function_identifier)
+            if resources_to_build.functions or resources_to_build.layers:
+                builder = ApplicationBuilder(
+                    resources_to_build,
+                    self._build_context.build_dir,
+                    self._build_context.base_dir,
+                    self._build_context.cache_dir,
+                    cached=True,
+                    is_building_specific_resource=True,
+                    manifest_path_override=self._build_context.manifest_path_override,
+                    container_manager=self._build_context.container_manager,
+                    mode=self._build_context.mode,
+                    combine_dependencies=self._combine_dependencies(),
+                )
+                LOG.debug("%sBuilding Function", self.log_prefix)
+                build_result = builder.build()
+                self._build_graph = build_result.build_graph
+                self._artifact_folder = build_result.artifacts.get(self._function_identifier)
+            else:
+                # non-buildable resource, then just use codeuri as built artifact folder
+                resource = self._build_context.get_resource(self._function_identifier)
+                self._artifact_folder = resource.codeuri
 
         zip_file_path = os.path.join(tempfile.gettempdir(), "data-" + uuid.uuid4().hex)
         self._zip_file = make_zip(zip_file_path, self._artifact_folder)
