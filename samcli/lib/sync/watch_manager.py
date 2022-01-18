@@ -140,7 +140,7 @@ class WatchManager:
                     updated_resources.add(ResourceIdentifier(get_full_path(old_stack.stack_path, resource_id)))
         for resource_id in updated_resources:
             self._on_code_change_wrapper(resource_id)()
-        self._waiting_infra_sync = True
+        # self._waiting_infra_sync = True
 
     def _update_stacks(self) -> None:
         """
