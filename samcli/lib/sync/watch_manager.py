@@ -85,18 +85,16 @@ class WatchManager:
         self._trigger_factory = None
 
         self._waiting_infra_sync = False
-        # self._is_infra_change = False
-        # self._updated_resources = set()
+        self._is_infra_change = False
+        self._updated_resources = set()
         self._color = Colored()
 
     def queue_infra_sync(self) -> None:
         """Queue up an infra structure sync.
         A simple bool flag is suffice
         """
-        # self._waiting_infra_sync = True
-
         if not self._stacks:
-            # self._is_infra_change = True
+            self._is_infra_change = True
             self._waiting_infra_sync = True
             return
 
@@ -105,11 +103,10 @@ class WatchManager:
         new_stacks_by_name = {s.name: s for s in new_stacks}
 
         if old_stacks_by_name.keys() != new_stacks_by_name.keys():
-            # self._is_infra_change = True
+            self._is_infra_change = True
             self._waiting_infra_sync = True
             return
 
-        updated_resources = set()
         for stack_name, old_stack in old_stacks_by_name.items():
             template_dict_new = new_stacks_by_name[stack_name].template_dict
             diff = DeepDiff(
@@ -121,26 +118,23 @@ class WatchManager:
                 ],
             )
             if len(diff) != 1 or "values_changed" not in diff:
-                # self._is_infra_change = True
+                self._is_infra_change = True
                 self._waiting_infra_sync = True
                 return
             for value_path in diff["values_changed"]:
                 regex = r"root\['Resources'\]\['(.*)'\]\['Metadata'\]\['aws:asset:path'\]"
                 metadata_asset_path = re.compile(regex)
                 if not metadata_asset_path.match(value_path):
-                    # self._updated_resources = set()
-                    # self._is_infra_change = True
+                    self._updated_resources = set()
+                    self._is_infra_change = True
                     self._waiting_infra_sync = True
                     return
                 else:
                     logical_id = str(re.search(regex, value_path).group(1))
                     resource = old_stack.resources.get(logical_id)
                     resource_id = ResourceMetadataNormalizer.get_resource_id(resource, logical_id)
-                    # self._updated_resources.add(ResourceIdentifier(get_full_path(old_stack.stack_path, resource_id)))
-                    updated_resources.add(ResourceIdentifier(get_full_path(old_stack.stack_path, resource_id)))
-        for resource_id in updated_resources:
-            self._on_code_change_wrapper(resource_id)()
-        # self._waiting_infra_sync = True
+                    self._updated_resources.add(ResourceIdentifier(get_full_path(old_stack.stack_path, resource_id)))
+        self._waiting_infra_sync = True
 
     def _update_stacks(self) -> None:
         """
@@ -227,10 +221,8 @@ class WatchManager:
         self._stop_code_sync()
         try:
             LOG.info(self._color.cyan("Starting infra sync."))
-            self._execute_infra_context()
-            # if self._is_infra_change:
-            #     self._execute_infra_context()
-            #     self._is_infra_change = False
+            if self._is_infra_change:
+                self._execute_infra_context()
         except Exception as e:
             LOG.error(
                 self._color.red("Failed to sync infra. Code sync is paused until template/stack is fixed."),
@@ -245,12 +237,15 @@ class WatchManager:
             # can be code changes during infra sync.
             self._observer.unschedule_all()
             self._update_stacks()
+            if not self._is_infra_change:
+                self._build_context.set_up()
             self._add_template_trigger()
             self._add_code_triggers()
-            # for resource_id in self._updated_resources:
-            #     self._on_code_change_wrapper(resource_id)()
-            # self._updated_resources = set()
             self._start_code_sync()
+            for resource_id in self._updated_resources:
+                self._on_code_change_wrapper(resource_id)()
+            self._updated_resources = set()
+            self._is_infra_change = False
             LOG.info(self._color.green("Infra sync completed."))
 
     def _on_code_change_wrapper(self, resource_id: ResourceIdentifier) -> OnChangeCallback:

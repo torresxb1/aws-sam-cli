@@ -19,7 +19,7 @@ from samcli.lib.bootstrap.nested_stack.nested_stack_manager import NestedStackMa
 from samcli.lib.build.build_graph import DEFAULT_DEPENDENCIES_DIR
 from samcli.lib.intrinsic_resolver.intrinsics_symbol_table import IntrinsicsSymbolTable
 from samcli.lib.providers.provider import ResourcesToBuildCollector, Stack, Function, LayerVersion
-from samcli.lib.providers.sam_function_provider import SamFunctionProvider, RefreshableSamFunctionProvider
+from samcli.lib.providers.sam_function_provider import SamFunctionProvider
 from samcli.lib.providers.sam_layer_provider import SamLayerProvider
 from samcli.lib.providers.sam_stack_provider import SamLocalStackProvider
 from samcli.lib.utils.osutils import BUILD_DIR_PERMISSIONS
@@ -128,7 +128,7 @@ class BuildContext:
         # Note(xinhol): self._use_raw_codeuri is added temporarily to fix issue #2717
         # when base_dir is provided, codeuri should not be resolved based on template file path.
         # we will refactor to make all path resolution inside providers intead of in multiple places
-        self._function_provider = RefreshableSamFunctionProvider(self.stacks, use_raw_codeuri=self._use_raw_codeuri)
+        self._function_provider = SamFunctionProvider(self.stacks, use_raw_codeuri=self._use_raw_codeuri)
         self._layer_provider = SamLayerProvider(self.stacks, self._use_raw_codeuri)
 
         if not self._base_dir:
